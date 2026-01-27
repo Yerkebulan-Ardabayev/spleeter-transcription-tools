@@ -4,9 +4,17 @@ import argparse
 import subprocess
 import sys
 import shutil
+import time  # Added time logic
 import torch
 from typing import List
 from faster_whisper import WhisperModel
+
+# Настройка кодировки для Windows консоли (безопасный метод для Python 3.7+)
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
+print("🔁 Инициализация скрипта...", flush=True)
 
 # --- НАСТРОЙКИ ПО УМОЛЧАНИЮ ---
 SUPPORTED_FORMATS = {'.wav', '.mp3', '.ogg', '.m4a', '.flac', '.wma', '.opus'}
@@ -116,9 +124,9 @@ class AudioTranscriber:
         # --- ОБРЕЗКА (ОПТИМИЗАЦИЯ) ---
         if resume_timestamp > 5.0:
             if ffmpeg_cmd:
-                # ИСПРАВЛЕНИЕ: используем абсолютный путь
+                # ИСПРАВЛЕНИЕ: используем абсолютный путь и расширение .wav для PCM
                 audio_dir = os.path.dirname(os.path.abspath(audio_path))
-                temp_cut_file = os.path.join(audio_dir, f"temp_resume_{os.path.basename(audio_path)}")
+                temp_cut_file = os.path.join(audio_dir, f"temp_resume_{os.path.splitext(os.path.basename(audio_path))[0]}.wav")
                 
                 print(f"   ⚙️  Подготовка FFmpeg...")
                 print(f"   📁 Создание временного файла с позиции {self._seconds_to_hms(resume_timestamp)}")
@@ -130,11 +138,11 @@ class AudioTranscriber:
                     
                     subprocess.run([
                         ffmpeg_cmd, '-y', '-v', 'quiet', '-ss', str(resume_timestamp), 
-                        '-i', audio_path, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', temp_cut_file
+                        '-i', os.path.abspath(audio_path), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', temp_cut_file
                     ], check=True, timeout=60)
                     
-                    # Проверяем что файл создан
-                    if os.path.exists(temp_cut_file) and os.path.getsize(temp_cut_file) > 0:
+                    # Проверяем что файл создан и не поврежден (минимум 1KB)
+                    if os.path.exists(temp_cut_file) and os.path.getsize(temp_cut_file) > 1024:
                         process_path = temp_cut_file
                         time_shift = resume_timestamp
                         print(f"   ✓ Временный файл готов!")
