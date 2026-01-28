@@ -91,6 +91,7 @@ class AudioTranscriber:
         
         existing_segments = []
         resume_timestamp = 0.0
+        temp_cut_file = None  # Инициализируем здесь для доступа в finally
         
         # --- ВОЗОБНОВЛЕНИЕ ---
         if os.path.exists(progress_file):
@@ -116,110 +117,113 @@ class AudioTranscriber:
             raise FileNotFoundError(f"Аудиофайл не найден: {audio_path}")
         
         process_path = audio_path
-        temp_cut_file = None
         time_shift = 0.0 
         
         ffmpeg_cmd = self._get_ffmpeg_cmd()
 
         # --- ОБРЕЗКА (ОПТИМИЗАЦИЯ) ---
-        if resume_timestamp > 5.0:
-            if ffmpeg_cmd:
-                # ИСПРАВЛЕНИЕ: используем абсолютный путь и расширение .wav для PCM
-                audio_dir = os.path.dirname(os.path.abspath(audio_path))
-                temp_cut_file = os.path.join(audio_dir, f"temp_resume_{os.path.splitext(os.path.basename(audio_path))[0]}.wav")
-                
-                print(f"   ⚙️  Подготовка FFmpeg...")
-                print(f"   📁 Создание временного файла с позиции {self._seconds_to_hms(resume_timestamp)}")
-                
-                try:
-                    # Удаляем старый temp файл если есть
-                    if os.path.exists(temp_cut_file):
-                        os.remove(temp_cut_file)
+        try:
+            if resume_timestamp > 5.0:
+                if ffmpeg_cmd:
+                    # ИСПРАВЛЕНИЕ: используем абсолютный путь и расширение .wav для PCM
+                    audio_dir = os.path.dirname(os.path.abspath(audio_path))
+                    temp_cut_file = os.path.join(audio_dir, f"temp_resume_{os.path.splitext(os.path.basename(audio_path))[0]}.wav")
                     
-                    subprocess.run([
-                        ffmpeg_cmd, '-y', '-v', 'quiet', '-ss', str(resume_timestamp), 
-                        '-i', os.path.abspath(audio_path), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', temp_cut_file
-                    ], check=True, timeout=60)
+                    print(f"   ⚙️  Подготовка FFmpeg...")
+                    print(f"   📁 Создание временного файла с позиции {self._seconds_to_hms(resume_timestamp)}")
                     
-                    # Проверяем что файл создан и не поврежден (минимум 1KB)
-                    if os.path.exists(temp_cut_file) and os.path.getsize(temp_cut_file) > 1024:
-                        process_path = temp_cut_file
-                        time_shift = resume_timestamp
-                        print(f"   ✓ Временный файл готов!")
-                    else:
-                        print(f"   ⚠️  Временный файл не создан. Обрабатываем полный файл.")
-                        temp_cut_file = None
+                    try:
+                        # Удаляем старый temp файл если есть
+                        if os.path.exists(temp_cut_file):
+                            os.remove(temp_cut_file)
                         
-                except subprocess.TimeoutExpired:
-                    print(f"   ⚠️  FFmpeg завис (timeout). Работаем с полным файлом.")
-                    if temp_cut_file and os.path.exists(temp_cut_file):
-                        try: os.remove(temp_cut_file)
-                        except: pass
-                    temp_cut_file = None
+                        subprocess.run([
+                            ffmpeg_cmd, '-y', '-v', 'quiet', '-ss', str(resume_timestamp), 
+                            '-i', os.path.abspath(audio_path), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', temp_cut_file
+                        ], check=True, timeout=60)
+                        
+                        # Проверяем что файл создан и не поврежден (минимум 1KB)
+                        if os.path.exists(temp_cut_file) and os.path.getsize(temp_cut_file) > 1024:
+                            process_path = temp_cut_file
+                            time_shift = resume_timestamp
+                            print(f"   ✓ Временный файл готов!")
+                        else:
+                            print(f"   ⚠️  Временный файл не создан. Обрабатываем полный файл.")
+                            temp_cut_file = None
+                            
+                    except subprocess.TimeoutExpired:
+                        print(f"   ⚠️  FFmpeg завис (timeout). Работаем с полным файлом.")
+                        if temp_cut_file and os.path.exists(temp_cut_file):
+                            try: os.remove(temp_cut_file)
+                            except: pass
+                        temp_cut_file = None
+                    except Exception as e:
+                        print(f"   ⚠️  Ошибка FFmpeg: {e}")
+                        print(f"   🔄 Работаем с полным файлом (будет дольше, но надежнее)")
+                        if temp_cut_file and os.path.exists(temp_cut_file):
+                            try: os.remove(temp_cut_file)
+                            except: pass
+                        temp_cut_file = None
+                else:
+                    print(f"   ⚠️  FFmpeg не найден. Пропуск обработанной части будет программным.")
+            
+            # --- ТРАНСКРИБАЦИЯ ---
+            print(f"   🚀 Запуск транскрибации...\n")
+            segments, info = self.model.transcribe(process_path, language="ru", vad_filter=True)
+            total_duration = info.duration + time_shift 
+            
+            processed_count = 0
+            with open(progress_file, 'a', encoding='utf-8') as pf:
+                for segment in segments:
+                    current_start = segment.start + time_shift
+                    current_end = segment.end + time_shift
+                    
+                    # Защита от дублей при наложении
+                    if current_end <= resume_timestamp + 0.1:
+                        continue
+                    
+                    percent = int((current_end / total_duration * 100)) if total_duration else 0
+                    
+                    # Визуальный прогресс-бар
+                    bar_length = 20
+                    filled = int(bar_length * percent / 100)
+                    bar = '█' * filled + '░' * (bar_length - filled)
+                    
+                    # Красивый вывод в консоль
+                    text_preview = segment.text.strip()[:40]
+                    sys.stdout.write(f"\r   🎤 [{bar}] {percent:3d}% | {self._seconds_to_hms(current_end)} | {text_preview}...")
+                    sys.stdout.flush()
+                    
+                    seg_data = {
+                        "start": round(current_start, 2), 
+                        "end": round(current_end, 2), 
+                        "text": segment.text.strip()
+                    }
+                    pf.write(json.dumps(seg_data, ensure_ascii=False) + "\n")
+                    pf.flush()
+                    existing_segments.append(seg_data)
+                    processed_count += 1
+            
+            print(f"\n   ✓ Обработка завершена! Обработано сегментов: {processed_count}")
+            return existing_segments
+            
+        finally:
+            # ГАРАНТИРОВАННОЕ удаление временного файла
+            if temp_cut_file and os.path.exists(temp_cut_file):
+                try: 
+                    os.remove(temp_cut_file)
+                    print(f"   🧹 Временный файл удален")
                 except Exception as e:
-                    print(f"   ⚠️  Ошибка FFmpeg: {e}")
-                    print(f"   🔄 Работаем с полным файлом (будет дольше, но надежнее)")
-                    if temp_cut_file and os.path.exists(temp_cut_file):
-                        try: os.remove(temp_cut_file)
-                        except: pass
-                    temp_cut_file = None
-            else:
-                print(f"   ⚠️  FFmpeg не найден. Пропуск обработанной части будет программным.")
-        
-        # --- ТРАНСКРИБАЦИЯ ---
-        print(f"   🚀 Запуск транскрибации...\n")
-        segments, info = self.model.transcribe(process_path, language="ru", vad_filter=True)
-        total_duration = info.duration + time_shift 
-        
-        processed_count = 0
-        with open(progress_file, 'a', encoding='utf-8') as pf:
-            for segment in segments:
-                current_start = segment.start + time_shift
-                current_end = segment.end + time_shift
-                
-                # Защита от дублей при наложении
-                if current_end <= resume_timestamp + 0.1:
-                    continue
-                
-                percent = int((current_end / total_duration * 100)) if total_duration else 0
-                
-                # Визуальный прогресс-бар
-                bar_length = 20
-                filled = int(bar_length * percent / 100)
-                bar = '█' * filled + '░' * (bar_length - filled)
-                
-                # Красивый вывод в консоль
-                text_preview = segment.text.strip()[:40]
-                sys.stdout.write(f"\r   🎤 [{bar}] {percent:3d}% | {self._seconds_to_hms(current_end)} | {text_preview}...")
-                sys.stdout.flush()
-                
-                seg_data = {
-                    "start": round(current_start, 2), 
-                    "end": round(current_end, 2), 
-                    "text": segment.text.strip()
-                }
-                pf.write(json.dumps(seg_data, ensure_ascii=False) + "\n")
-                pf.flush()
-                existing_segments.append(seg_data)
-                processed_count += 1
-        
-        print(f"\n   ✓ Обработка завершена! Обработано сегментов: {processed_count}")
-
-        # Удаляем временный файл
-        if temp_cut_file and os.path.exists(temp_cut_file):
-            try: 
-                os.remove(temp_cut_file)
-                print(f"   🧹 Временный файл удален")
-            except Exception as e:
-                print(f"   ⚠️  Не удалось удалить temp файл: {e}")
-
-        return existing_segments
+                    print(f"   ⚠️  Не удалось удалить temp файл: {e}")
 
 def get_audio_files(directory: str) -> List[str]:
     files = []
     print(f"\n📂 Сканирую папку: {os.path.abspath(directory)}")
     for root, _, filenames in os.walk(directory):
         for filename in filenames:
+            # ИСКЛЮЧАЕМ временные файлы из обработки
+            if filename.startswith('temp_resume_'):
+                continue
             if os.path.splitext(filename)[1].lower() in SUPPORTED_FORMATS:
                 files.append(os.path.join(root, filename))
     
@@ -239,6 +243,18 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="auto", help="Устройство (cuda, cpu, auto)")
     parser.add_argument("--ffmpeg", default=None, help="Путь к ffmpeg.exe вручную")
     args = parser.parse_args()
+    
+    # 🧹 ОЧИСТКА старых временных файлов при запуске
+    cleanup_dir = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
+    if os.path.exists(cleanup_dir):
+        for filename in os.listdir(cleanup_dir):
+            if filename.startswith('temp_resume_') and filename.endswith('.wav'):
+                temp_path = os.path.join(cleanup_dir, filename)
+                try:
+                    os.remove(temp_path)
+                    print(f"🧹 Удален старый временный файл: {filename}")
+                except Exception as e:
+                    print(f"⚠️  Не удалось удалить {filename}: {e}")
 
     # Сбор файлов
     target_files = []
