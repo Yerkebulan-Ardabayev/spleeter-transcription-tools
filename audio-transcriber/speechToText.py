@@ -312,21 +312,30 @@ if __name__ == "__main__":
     for i, file_path in enumerate(target_files, 1):
         filename = os.path.basename(file_path)
         base_path = os.path.splitext(file_path)[0]
-        
-        # Пути выходных файлов
-        srt_file = base_path + ".srt"
-        txt_file = base_path + ".txt" # Читаемый
-        
+
+        # Новые понятные имена
+        srt_file = base_path + "_субтитры.srt"
+        txt_file = base_path + "_транскрипт.txt"
+        # Старые имена (для backward-compat — не перезаписывать если есть)
+        srt_legacy = base_path + ".srt"
+        txt_legacy = base_path + ".txt"
+
         print(f"\n" + "="*70)
         print(f"📄 Файл {i}/{len(target_files)}: {filename}")
         print("="*70)
-        
-        # Если файлы уже есть, пропускаем
-        if os.path.exists(srt_file) and os.path.exists(txt_file):
-             print(f"   ⏭️  Этот файл уже обработан, пропускаем.")
-             print(f"   📁 SRT: {os.path.basename(srt_file)}")
-             print(f"   📁 TXT: {os.path.basename(txt_file)}")
-             continue
+
+        # Если в любом варианте имён оба файла готовы — пропускаем
+        has_new = os.path.exists(srt_file) and os.path.exists(txt_file)
+        has_old = os.path.exists(srt_legacy) and os.path.exists(txt_legacy)
+        if has_new or has_old:
+            print(f"   ⏭️  Этот файл уже обработан, пропускаем.")
+            if has_new:
+                print(f"   📁 SRT: {os.path.basename(srt_file)}")
+                print(f"   📁 TXT: {os.path.basename(txt_file)}")
+            else:
+                print(f"   📁 SRT: {os.path.basename(srt_legacy)}")
+                print(f"   📁 TXT: {os.path.basename(txt_legacy)}")
+            continue
             
         try:
             segments = app.transcribe(file_path)

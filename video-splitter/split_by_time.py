@@ -1,4 +1,6 @@
 import os
+import math
+import glob
 import subprocess
 import shutil
 
@@ -52,7 +54,8 @@ def split_video_by_time(ffmpeg_path: str, input_file: str) -> None:
         print(f"✅ {input_file} короче {SPLIT_TIME_MIN} мин ({duration_min:.1f} мин). Пропускаем.")
         return
 
-    print(f"\n✂️ Обработка: {input_file} ({duration_min:.1f} мин)")
+    total_parts = math.ceil(duration / SPLIT_TIME_SEC)
+    print(f"\n✂️ Обработка: {input_file} ({duration_min:.1f} мин → {total_parts} частей)")
     output_pattern = f"{base_name}_part_%03d{ext}"
 
     # -map 0 — все дорожки, -c copy — без перекодировки
@@ -64,9 +67,27 @@ def split_video_by_time(ffmpeg_path: str, input_file: str) -> None:
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(f"✨ Готово! Файлы: {base_name}_part_XXX{ext}")
     except subprocess.CalledProcessError as e:
         print(f"❌ Ошибка ffmpeg: {e.stderr or e}")
+        return
+
+    # Переименование _part_000, _part_001, ... → _часть_1_из_N
+    produced = sorted(glob.glob(f"{glob.escape(base_name)}_part_*{ext}"))
+    n = len(produced)
+    if n == 0:
+        print("⚠️  ffmpeg отработал, но части не найдены.")
+        return
+
+    width = len(str(n))  # чтобы "10 из 12" и "2 из 12" были одинаковой ширины
+    for idx, old in enumerate(produced, 1):
+        new_name = f"{base_name}_часть_{idx:0{width}d}_из_{n}{ext}"
+        if old == new_name:
+            continue
+        try:
+            os.replace(old, new_name)
+        except OSError as e:
+            print(f"   ⚠️  Не удалось переименовать {old} → {new_name}: {e}")
+    print(f"✨ Готово! {n} файлов: {base_name}_часть_1_из_{n}{ext} … _часть_{n}_из_{n}{ext}")
 
 def main():
     # --- ВАЖНОЕ ИСПРАВЛЕНИЕ: ПЕРЕХОДИМ В ПАПКУ СКРИПТА ---
@@ -92,7 +113,9 @@ def main():
 
     found_work = False
     for f in files:
-        if "_part_" in f: continue
+        # Пропускаем уже нарезанные части (и старый _part_, и новый _часть_)
+        if "_part_" in f or "_часть_" in f:
+            continue
         found_work = True
         split_video_by_time(ffmpeg, f)
 

@@ -55,40 +55,29 @@ def detect_unfinished_work():
 
     return None, []
 
-# --- ФУНКЦИЯ АВТОПОИСКА ВИДЕО ---
-def auto_find_video():
-    files = [f for f in os.listdir('.')
-             if f.lower().endswith(VIDEO_EXTENSIONS)
-             and "_CLEAN" not in f]
+# --- ФУНКЦИЯ ПОИСКА НЕОБРАБОТАННЫХ ВИДЕО ---
+def find_videos_to_process():
+    """Список всех видео в папке, у которых ещё нет финального _CLEAN.mp3."""
+    all_files = [f for f in os.listdir('.')
+                 if f.lower().endswith(VIDEO_EXTENSIONS)
+                 and "_CLEAN" not in f]
 
-    # ПРИМЕНЯЕМ УМНУЮ СОРТИРОВКУ
-    files.sort(key=smart_sort_key)
+    # Фильтруем уже обработанные
+    pending = []
+    done = []
+    for f in all_files:
+        base_name = os.path.splitext(os.path.basename(f))[0]
+        if os.path.exists(f"{base_name}_CLEAN.mp3"):
+            done.append(f)
+        else:
+            pending.append(f)
 
-    if not files:
-        print("[ОШИБКА] В этой папке нет видеофайлов!")
-        return None
-    
-    if len(files) == 1:
-        print(f"[*] Найден один файл: '{files[0]}'.")
-        return files[0]
-    
-    while True:
-        print("\n[*] Найдено несколько видео (отсортировано):")
-        for i, f in enumerate(files):
-            print(f"   {i+1}. {f}")
-            
-        try:
-            choice = input("\nВведите НОМЕР файла (цифру): ").strip()
-            idx = int(choice) - 1
-            
-            if 0 <= idx < len(files):
-                selected_file = files[idx]
-                print(f"\n[OK] Вы выбрали: {selected_file}")
-                return selected_file
-            else:
-                print(f"[ОШИБКА] Нет файла с номером {choice}. Введите число от 1 до {len(files)}.")
-        except ValueError:
-            print("[ОШИБКА] Это не число. Попробуйте еще раз.")
+    pending.sort(key=smart_sort_key)
+    done.sort(key=smart_sort_key)
+
+    if done:
+        print(f"[*] Уже обработано: {len(done)} (пропускаем)")
+    return pending
 
 # --------------------------------
 
@@ -270,22 +259,44 @@ def clean_voice_final_v2(video_filename):
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print(">>> ОЧИСТКА ГОЛОСА В ВИДЕО (Demucs AI)")
+    print(">>> ОЧИСТКА ГОЛОСА В ВИДЕО (Demucs AI) — BATCH MODE")
     print("="*60)
-    
-    # Проверяем незаконченную работу
+
+    # 1. Если есть прерванная работа — сначала дообработать её
     unfinished_video, processed_parts = detect_unfinished_work()
-    
+    processed_this_run = set()
+
     if unfinished_video:
         print(f"\n>>> ОБНАРУЖЕНА НЕЗАКОНЧЕННАЯ РАБОТА!")
         print(f"Видео: {unfinished_video}")
         print(f"Уже обработано частей: {len(processed_parts)}")
-        print(f"\n>>> Продолжаем обработку...\n")
+        print(f"\n>>> Продолжаем с того места...\n")
         clean_voice_final_v2(unfinished_video)
-    else:
-        found_video = auto_find_video()
-        
-        if found_video:
-            clean_voice_final_v2(found_video)
+        processed_this_run.add(unfinished_video)
+
+    # 2. Пройти по всем остальным необработанным видео
+    pending = [v for v in find_videos_to_process() if v not in processed_this_run]
+
+    if not pending:
+        if not unfinished_video:
+            print("\n[*] Нет видео для обработки (либо все уже сделаны).")
         else:
-            input("\nНажмите Enter, чтобы выйти...")
+            print("\n" + "="*60)
+            print(">>> ВСЁ ОБРАБОТАНО!")
+            print("="*60)
+        input("\nНажмите Enter, чтобы выйти...")
+    else:
+        print(f"\n>>> НАЙДЕНО {len(pending)} видео для обработки (по очереди):")
+        for i, v in enumerate(pending, 1):
+            print(f"   {i}. {v}")
+
+        for i, video in enumerate(pending, 1):
+            print(f"\n{'#'*60}")
+            print(f"### ФАЙЛ {i}/{len(pending)}: {video}")
+            print(f"{'#'*60}")
+            clean_voice_final_v2(video)
+
+        print("\n" + "="*60)
+        print(f">>> ВСЕ {len(pending)} ФАЙЛОВ ОБРАБОТАНЫ!")
+        print("="*60)
+        input("\nНажмите Enter, чтобы выйти...")
