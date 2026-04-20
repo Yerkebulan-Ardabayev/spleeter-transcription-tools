@@ -4,42 +4,42 @@
 
 ## 📁 Проекты
 
-### 🎵 spleeter
-Инструмент для разделения аудио на отдельные дорожки (голос и музыка).
+### 🎵 voice-cleaner
+Очистка голоса в видео через Demucs AI — извлекает вокал и отделяет его от фоновой музыки/шума.
 
 **Использование:**
 ```bash
-cd spleeter
+cd voice-cleaner
 start.bat
 ```
 
 **Требования:**
-- Python 3.x
-- Spleeter library
+- Python 3.10
+- demucs, pydub, imageio-ffmpeg
 
 ---
 
-### ✂️ splite_mediaFiles
-Разделение медиа файлов (аудио/видео) на части по времени.
+### ✂️ video-splitter
+Разделение видео на части по времени (ffmpeg segment, без перекодировки).
 
 **Использование:**
 ```bash
-cd splite_mediaFiles
+cd video-splitter
 start.bat
 ```
 
 **Функционал:**
-- Разделение видео и аудио файлов на части заданной длительности
-- Автоматическая обработка файлов
+- Нарезка видео на равные части заданной длительности (по умолчанию 40 мин)
+- `-c copy` — мгновенная нарезка без потери качества
 
 ---
 
-### 🎤 transcription
-Автоматическая транскрипция аудио в текст с использованием speech recognition.
+### 🎤 audio-transcriber
+Автоматическая транскрипция аудио в текст через faster-whisper (large-v3).
 
 **Использование:**
 ```bash
-cd transcription
+cd audio-transcriber
 start.bat
 ```
 

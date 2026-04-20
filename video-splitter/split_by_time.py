@@ -1,54 +1,72 @@
 import os
 import subprocess
-import sys
 import shutil
 
 # --- НАСТРОЙКИ ---
 SPLIT_TIME_MIN = 40  # Длительность одной части в минутах
 SPLIT_TIME_SEC = SPLIT_TIME_MIN * 60
 
-# Путь к FFmpeg
-HARDCODED_FFMPEG = r"C:\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\bin\ffmpeg.exe"
+# Путь к FFmpeg. Можно переопределить через env var FFMPEG_PATH.
+HARDCODED_FFMPEG = os.environ.get(
+    "FFMPEG_PATH",
+    r"C:\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\bin\ffmpeg.exe",
+)
 
-def get_ffmpeg_path():
+def get_ffmpeg_path() -> str | None:
     local_ffmpeg = os.path.join(os.getcwd(), "ffmpeg.exe")
-    if os.path.exists(local_ffmpeg): return local_ffmpeg
-    if os.path.exists(HARDCODED_FFMPEG): return HARDCODED_FFMPEG
-    if shutil.which("ffmpeg"): return "ffmpeg"
+    if os.path.exists(local_ffmpeg):
+        return local_ffmpeg
+    if os.path.exists(HARDCODED_FFMPEG):
+        return HARDCODED_FFMPEG
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
     return None
 
-def get_duration(ffmpeg_path, file_path):
+def get_duration(ffmpeg_path: str, file_path: str) -> float:
     ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
-    if not os.path.exists(ffprobe_path): ffprobe_path = "ffprobe"
-    cmd = [ffprobe_path, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+    if not os.path.exists(ffprobe_path):
+        ffprobe_path = "ffprobe"
+    cmd = [
+        ffprobe_path, "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return float(result.stdout.strip())
-    except: return 0.0
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as e:
+        print(f"⚠️  Не удалось определить длительность '{file_path}': {e}")
+        return 0.0
 
-def split_video_by_time(ffmpeg_path, input_file):
+def split_video_by_time(ffmpeg_path: str, input_file: str) -> None:
     base_name, ext = os.path.splitext(input_file)
     duration = get_duration(ffmpeg_path, input_file)
+
+    if duration <= 0:
+        print(f"⚠️  Пропускаем '{input_file}' — длительность неизвестна.")
+        return
+
     duration_min = duration / 60
-    
     if duration_min <= SPLIT_TIME_MIN:
         print(f"✅ {input_file} короче {SPLIT_TIME_MIN} мин ({duration_min:.1f} мин). Пропускаем.")
         return
 
     print(f"\n✂️ Обработка: {input_file} ({duration_min:.1f} мин)")
     output_pattern = f"{base_name}_part_%03d{ext}"
-    
-    # Добавлен флаг -map 0 (все дорожки) и -c copy (без перекодировки)
+
+    # -map 0 — все дорожки, -c copy — без перекодировки
     cmd = [
-        ffmpeg_path, "-i", input_file, "-c", "copy", "-map", "0",
+        ffmpeg_path, "-hide_banner", "-loglevel", "warning",
+        "-i", input_file, "-c", "copy", "-map", "0",
         "-f", "segment", "-segment_time", str(SPLIT_TIME_SEC),
-        "-reset_timestamps", "1", output_pattern
+        "-reset_timestamps", "1", output_pattern,
     ]
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"✨ Готово! Файлы: {base_name}_part_XXX{ext}")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка ffmpeg: {e.stderr or e}")
 
 def main():
     # --- ВАЖНОЕ ИСПРАВЛЕНИЕ: ПЕРЕХОДИМ В ПАПКУ СКРИПТА ---

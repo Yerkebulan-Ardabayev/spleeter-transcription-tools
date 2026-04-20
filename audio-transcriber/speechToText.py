@@ -1,10 +1,11 @@
 import os
 import json
 import argparse
+import contextlib
 import subprocess
 import sys
 import shutil
-import time  # Added time logic
+import traceback
 import torch
 from typing import List
 from faster_whisper import WhisperModel
@@ -21,9 +22,12 @@ SUPPORTED_FORMATS = {'.wav', '.mp3', '.ogg', '.m4a', '.flac', '.wma', '.opus'}
 DEFAULT_MODEL = "large-v3"
 DEFAULT_COMPUTE = "int8" # float16 для GPU, int8 для CPU
 
-# === ТВОЙ ПУТЬ К FFMPEG ===
-# Можно переопределить через аргумент --ffmpeg
-HARDCODED_FFMPEG = r"C:\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\bin\ffmpeg.exe"
+# === ПУТЬ К FFMPEG ===
+# Переопределяется через --ffmpeg или env var FFMPEG_PATH
+HARDCODED_FFMPEG = os.environ.get(
+    "FFMPEG_PATH",
+    r"C:\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\ffmpeg-2025-10-12-git-0bc54cddb1-essentials_build\bin\ffmpeg.exe",
+)
 
 class AudioTranscriber:
     def __init__(self, model_size: str, device: str, compute_type: str, ffmpeg_path: str = None):
@@ -45,15 +49,17 @@ class AudioTranscriber:
             self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
             print(f"   ✓ Модель загружена на CPU!\n")
 
-    def _seconds_to_hms(self, seconds: float, separator=":") -> str:
+    @staticmethod
+    def _seconds_to_hms(seconds: float, separator: str = ":") -> str:
         """Формат 00:00:00"""
         m, s = divmod(seconds, 60)
         h, m = divmod(m, 60)
         return f"{int(h):02d}{separator}{int(m):02d}{separator}{int(s):02d}"
 
-    def _seconds_to_srt_time(self, seconds: float) -> str:
+    @classmethod
+    def _seconds_to_srt_time(cls, seconds: float) -> str:
         """Формат для SRT: 00:00:00,000"""
-        parts = self._seconds_to_hms(seconds, ":")
+        parts = cls._seconds_to_hms(seconds, ":")
         ms = int((seconds % 1) * 1000)
         return f"{parts},{ms:03d}"
 
@@ -154,15 +160,15 @@ class AudioTranscriber:
                     except subprocess.TimeoutExpired:
                         print(f"   ⚠️  FFmpeg завис (timeout). Работаем с полным файлом.")
                         if temp_cut_file and os.path.exists(temp_cut_file):
-                            try: os.remove(temp_cut_file)
-                            except: pass
+                            with contextlib.suppress(OSError):
+                                os.remove(temp_cut_file)
                         temp_cut_file = None
-                    except Exception as e:
+                    except (subprocess.CalledProcessError, OSError) as e:
                         print(f"   ⚠️  Ошибка FFmpeg: {e}")
                         print(f"   🔄 Работаем с полным файлом (будет дольше, но надежнее)")
                         if temp_cut_file and os.path.exists(temp_cut_file):
-                            try: os.remove(temp_cut_file)
-                            except: pass
+                            with contextlib.suppress(OSError):
+                                os.remove(temp_cut_file)
                         temp_cut_file = None
                 else:
                     print(f"   ⚠️  FFmpeg не найден. Пропуск обработанной части будет программным.")
@@ -210,10 +216,10 @@ class AudioTranscriber:
         finally:
             # ГАРАНТИРОВАННОЕ удаление временного файла
             if temp_cut_file and os.path.exists(temp_cut_file):
-                try: 
+                try:
                     os.remove(temp_cut_file)
                     print(f"   🧹 Временный файл удален")
-                except Exception as e:
+                except OSError as e:
                     print(f"   ⚠️  Не удалось удалить temp файл: {e}")
 
 def get_audio_files(directory: str) -> List[str]:
@@ -319,7 +325,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"\n   ❌ ОШИБКА при обработке {filename}:")
             print(f"   📝 Детали: {e}")
-            import traceback
             print(f"\n   🔍 Полная трассировка:")
             traceback.print_exc()
     
