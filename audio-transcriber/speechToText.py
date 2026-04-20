@@ -5,6 +5,7 @@ import contextlib
 import subprocess
 import sys
 import shutil
+import time
 import traceback
 import torch
 from typing import List
@@ -62,6 +63,17 @@ class AudioTranscriber:
         parts = cls._seconds_to_hms(seconds, ":")
         ms = int((seconds % 1) * 1000)
         return f"{parts},{ms:03d}"
+
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        """Компактный формат ETA: '45с', '5.2мин', '1ч 20м'"""
+        if seconds < 60:
+            return f"{int(seconds):2d}с"
+        if seconds < 3600:
+            return f"{seconds / 60:4.1f}мин"
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        return f"{h}ч {m:02d}м"
 
     def _get_ffmpeg_cmd(self):
         # 1. Приоритет: аргумент командной строки
@@ -176,28 +188,40 @@ class AudioTranscriber:
             # --- ТРАНСКРИБАЦИЯ ---
             print(f"   🚀 Запуск транскрибации...\n")
             segments, info = self.model.transcribe(process_path, language="ru", vad_filter=True)
-            total_duration = info.duration + time_shift 
-            
+            total_duration = info.duration + time_shift
+
+            run_start = time.time()
+            run_origin = resume_timestamp  # с какого места стартовали в этом запуске
             processed_count = 0
             with open(progress_file, 'a', encoding='utf-8') as pf:
                 for segment in segments:
                     current_start = segment.start + time_shift
                     current_end = segment.end + time_shift
-                    
+
                     # Защита от дублей при наложении
                     if current_end <= resume_timestamp + 0.1:
                         continue
-                    
+
                     percent = int((current_end / total_duration * 100)) if total_duration else 0
-                    
+
                     # Визуальный прогресс-бар
                     bar_length = 20
                     filled = int(bar_length * percent / 100)
                     bar = '█' * filled + '░' * (bar_length - filled)
-                    
+
+                    # Оценка оставшегося времени (ETA) — по скорости обработки аудио-секунд
+                    elapsed = time.time() - run_start
+                    done_audio = max(0.1, current_end - run_origin)
+                    remaining_audio = max(0.0, total_duration - current_end)
+                    eta_sec = (elapsed / done_audio) * remaining_audio if done_audio > 0 else 0
+                    eta_str = self._format_eta(eta_sec)
+
                     # Красивый вывод в консоль
                     text_preview = segment.text.strip()[:40]
-                    sys.stdout.write(f"\r   🎤 [{bar}] {percent:3d}% | {self._seconds_to_hms(current_end)} | {text_preview}...")
+                    sys.stdout.write(
+                        f"\r   🎤 [{bar}] {percent:3d}% | {self._seconds_to_hms(current_end)}"
+                        f" | ETA {eta_str} | {text_preview}..."
+                    )
                     sys.stdout.flush()
                     
                     seg_data = {
